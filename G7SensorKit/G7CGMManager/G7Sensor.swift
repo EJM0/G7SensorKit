@@ -60,10 +60,18 @@ public protocol G7SensorDelegate: AnyObject {
     /// One line from the watch acquisition arm for the host's device log. Optional; only the
     /// watch produces it.
     func sensor(_ sensor: G7Sensor, logEvent line: String)
+
+    /// The watch adopted a peripheral as this sensor (nil when it let go of one). Optional.
+    func sensor(_ sensor: G7Sensor, didAdoptPeripheral identifier: UUID?)
+
+    /// `watchNeedsCodeFor` or `watchIsSearching` changed. Optional; only the watch produces it.
+    func sensorWatchStatusDidChange(_ sensor: G7Sensor)
 }
 
 public extension G7SensorDelegate {
     func sensor(_ sensor: G7Sensor, logEvent line: String) {}
+    func sensor(_ sensor: G7Sensor, didAdoptPeripheral identifier: UUID?) {}
+    func sensorWatchStatusDidChange(_ sensor: G7Sensor) {}
 }
 
 public enum G7SensorError: Error {
@@ -337,6 +345,13 @@ public final class G7Sensor: G7BluetoothManagerDelegate {
     public func dropConnection() {
         bluetoothManager.disconnect()
     }
+
+#if os(watchOS)
+    /// Seeds the watch arm's reading clock after a relaunch.
+    func noteLatestReading(at date: Date) {
+        bluetoothManager.noteReading(at: date)
+    }
+#endif
 
     public func resumeScanning() {
         // Deliberately leaves the active peripheral identifier alone. Every
@@ -799,6 +814,22 @@ public final class G7Sensor: G7BluetoothManagerDelegate {
     func bluetoothManager(_ manager: G7BluetoothManager, logEvent line: String) {
         delegateQueue.async { self.delegate?.sensor(self, logEvent: line) }
     }
+
+#if os(watchOS)
+    func bluetoothManager(_ manager: G7BluetoothManager, didAdoptPeripheral identifier: UUID?) {
+        guard lockedCredentials.value.peripheralIdentifier != identifier else { return }
+        mutateCredentials { $0.peripheralIdentifier = identifier }
+        delegateQueue.async { self.delegate?.sensor(self, didAdoptPeripheral: identifier) }
+    }
+
+    func bluetoothManagerWatchStatusDidChange(_ manager: G7BluetoothManager) {
+        delegateQueue.async { self.delegate?.sensorWatchStatusDidChange(self) }
+    }
+
+    public var watchNeedsCodeFor: String? { bluetoothManager.watchNeedsCodeFor }
+
+    public var watchIsSearching: Bool { bluetoothManager.watchIsSearching }
+#endif
 
     func bluetoothManagerCanAuthenticate(_ manager: G7BluetoothManager) -> Bool {
         guard mode == .direct else { return true }
