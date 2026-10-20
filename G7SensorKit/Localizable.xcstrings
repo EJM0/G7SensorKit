@@ -1289,6 +1289,9 @@
         }
       }
     },
+    "Sensor Pairing Not Finished" : {
+      "comment" : "Alert title when a G7 pairing's Bluetooth bond did not complete"
+    },
     "Sensor Session Ended" : {
       "comment" : "Alert title at the end of the sensor grace period"
     },
@@ -1300,6 +1303,12 @@
     },
     "The pairing code is the 4-digit number printed on the sensor applicator." : {
       "comment" : "Pairing failure reason for a malformed G7 pairing code"
+    },
+    "The pairing code was right, but the pairing could not finish while Trio was in the background. Open Trio on the watch and keep it open until a glucose value shows; accept the Bluetooth pairing request if one appears." : {
+      "comment" : "Alert body on the watch when a G7 pairing's Bluetooth bond did not complete"
+    },
+    "The pairing code was right, but the pairing could not finish. Keep the app open until a glucose value shows; accept the Bluetooth pairing request if one appears." : {
+      "comment" : "Alert body when a G7 pairing's Bluetooth bond did not complete"
     },
     "The sensor accepted the pairing code but refused the connection." : {
       "comment" : "Error description for a G7 sensor rejecting an authenticated connection with no reason given"
