@@ -63,8 +63,11 @@ public final class G7WatchAcquisition: G7AcquisitionArm {
     private var holdPending = false
     /// Ends the running hold now, which lodges at once.
     private var endHold: (() -> Void)?
-    /// A delayed-connect option rejected by the daemon falls back to ordinary connects for this run.
+    /// A delayed-connect option rejected by the daemon falls back to ordinary connects this run;
+    /// the per-sensor UserDefaults flag also carries that choice across watch app relaunches.
     private var delayedConnectUnavailable = false
+    /// A plain connect rejected as invalid must not be retried forever by subsequent wake callbacks.
+    private var invalidConnectRequestBlockedFor: UUID?
     /// Whether the outstanding connect was lodged with a start delay.
     private var lodgedWithStartDelay = false
     /// Confined to `managerQueue`; background scan passes are intentionally avoided.
@@ -191,12 +194,35 @@ public final class G7WatchAcquisition: G7AcquisitionArm {
         let sinceLodge = lodgedAt.map { Date().timeIntervalSince($0) } ?? .infinity
         lodgedAt = nil
         let code = (error as NSError?).map { "\($0.domain)#\($0.code) \($0.localizedDescription)" } ?? "no error"
+        let nsError = error as NSError?
+
+        // Match xDrip4iOS's direct-watch recovery: CoreBluetooth reports invalidParameters
+        // synchronously when this watch/daemon rejects StartDelay. Remember that per sensor and
+        // retry the saved peripheral immediately with ordinary connection options.
+        if usedStartDelay,
+           nsError?.domain == CBErrorDomain,
+           nsError?.code == CBError.invalidParameters.rawValue
+        {
+            delayedConnectUnavailable = true
+            UserDefaults.standard.set(true, forKey: Self.delayUnavailableDefaultsKey(for: peripheral.identifier))
+            watchLog("watch rejected delayed connect options (\(code)) — persisted for this sensor; retrying immediately without options")
+            lodge(peripheral, why: "retry after delayed-connect option rejection")
+            return true
+        }
+
+        // If the ordinary request is also rejected, stop automatic retries. The caller can
+        // reinitialize the acquisition after its Bluetooth configuration or sensor changes.
+        if !usedStartDelay,
+           nsError?.domain == CBErrorDomain,
+           nsError?.code == CBError.invalidParameters.rawValue
+        {
+            invalidConnectRequestBlockedFor = peripheral.identifier
+            watchLog("ordinary connect also rejected with invalid parameters (\(code)) — automatic connect requests stopped")
+            return true
+        }
+
         switch G7WatchAcquisition.onConnectFailure(sinceLodge: sinceLodge) {
         case .backOff(let s):
-            if usedStartDelay, sinceLodge < G7WatchAcquisition.synchronousRefusalWindow {
-                delayedConnectUnavailable = true
-                watchLog("daemon refused the delayed connect — using ordinary connects from now on")
-            }
             watchLog(String(format: "REFUSED %.2f s after the lodge (%@) — lodging again in %.0f s", sinceLodge, code, s))
             let id = peripheral.identifier
             queue.asyncAfter(deadline: .now() + s) { [weak self] in
@@ -296,7 +322,8 @@ public final class G7WatchAcquisition: G7AcquisitionArm {
     /// ONE plain connect with the daemon. Never held, never withdrawn by us.
     private func lodge(_ peripheral: CBPeripheral, why: String, startDelay: TimeInterval = 0) {
         dispatchPrecondition(condition: .onQueue(queue))
-        guard central.state == .poweredOn, !lodged else { return }
+        guard central.state == .poweredOn, !lodged,
+              invalidConnectRequestBlockedFor != peripheral.identifier else { return }
         switch peripheral.state {
         case .connected:     return
         case .connecting:
@@ -340,10 +367,14 @@ public final class G7WatchAcquisition: G7AcquisitionArm {
         }
         manager.setNeedsCodeForSensor(nil)
         lodged = true; lodgedAt = Date()
-        let useStartDelay = startDelay > 0 && !delayedConnectUnavailable
+        let persistedDelayUnavailable = UserDefaults.standard.bool(forKey: Self.delayUnavailableDefaultsKey(for: peripheral.identifier))
+        let useStartDelay = startDelay > 0 && !delayedConnectUnavailable && !persistedDelayUnavailable
         lodgedWithStartDelay = useStartDelay
+        // xDrip4iOS rounds this option up to integral seconds. Fractional NSNumber values can be
+        // rejected by CoreBluetooth as invalid parameters even though the key itself is available.
+        let delaySeconds = max(1, Int(ceil(startDelay)))
         let options: [String: NSNumber]? = useStartDelay
-            ? [CBConnectPeripheralOptionStartDelayKey: NSNumber(value: startDelay)]
+            ? [CBConnectPeripheralOptionStartDelayKey: NSNumber(value: delaySeconds)]
             : nil
         central.connect(peripheral, options: options)
         if useStartDelay {
@@ -351,6 +382,10 @@ public final class G7WatchAcquisition: G7AcquisitionArm {
         } else {
             watchLog("lodged — \(why) · the app may suspend")
         }
+    }
+
+    private static func delayUnavailableDefaultsKey(for identifier: UUID) -> String {
+        "G7WatchAcquisition.delayOptionUnavailable.\(identifier.uuidString)"
     }
 
     /// A peripheral restored as disconnecting: cancel the close, then lodge once it reads disconnected; still
