@@ -72,8 +72,8 @@ public final class G7WatchAcquisition: G7AcquisitionArm {
     private var lodgedWithStartDelay = false
     /// Confined to `managerQueue`; background scan passes are intentionally avoided.
     private var appIsActive = false
-    /// A restored close is being settled: its looks lodge.
-    private var settlingRestoredClose = false
+    /// A restored in-flight connect/close is being settled: its looks lodge.
+    private var settlingRestoredPeripheral = false
     /// The one scan pass.
     private var bootstrapPass = false
     private var bootstrapTimer: DispatchSourceTimer?
@@ -329,32 +329,13 @@ public final class G7WatchAcquisition: G7AcquisitionArm {
         case .connecting:
             // Not ours (ours sets `lodged`): a restored request bluetoothd no longer held cost eight hours
             // with no link (2026-09-16). Cancel it and lodge our own; the timer covers a silent cancel.
-            watchLog("restored as connecting with no request of ours — cancelling it and lodging a fresh connect")
-            central.cancelPeripheralConnection(peripheral)
-            let id = peripheral.identifier
-            queue.asyncAfter(deadline: .now() + 2) { [weak self] in
-                guard let self, !self.lodged,
-                      let p = self.central.retrievePeripherals(withIdentifiers: [id]).first else { return }
-                guard p.state != .disconnected else {
-                    self.lodge(p, why: "after cancelling a restored connect the daemon did not hold")
-                    return
-                }
-                guard p.state == .connecting else { return }
-                // The cancel went unanswered and the peripheral still reads as connecting (2026-10-16 23:16: the
-                // watch then read nothing until the phone took over). A connect on a connecting peripheral
-                // stands a request of ours either way.
-                self.lodged = true
-                self.lodgedAt = Date()
-                self.lodgedWithStartDelay = false
-                self.central.connect(p, options: nil)
-                self.watchLog("restored connect still pending 2 s after the cancel — lodged our own over it")
-            }
+            settleRestoredPeripheral(peripheral)
             return
         case .disconnecting:
             // Ours: the close callback lodges, as a connect issued during a cancel is lost inside CoreBluetooth.
             // Restored as disconnecting, the close is one this process never asked for and never hears of
             // (2026-10-18 23:45: every recheck and scan stopped here, no reading for 55 min until the app opened).
-            if linkUpAt == nil { settleRestoredClose(peripheral) }
+            if linkUpAt == nil { settleRestoredPeripheral(peripheral) }
             return
         default:             break
         }
@@ -388,36 +369,40 @@ public final class G7WatchAcquisition: G7AcquisitionArm {
         "G7WatchAcquisition.delayOptionUnavailable.\(identifier.uuidString)"
     }
 
-    /// A peripheral restored as disconnecting: cancel the close, then lodge once it reads disconnected; still
-    /// disconnecting at the second look, lodge our own over it. The process is held for the looks.
-    private func settleRestoredClose(_ peripheral: CBPeripheral) {
+    /// A restored connect/close may outlive its original process without a request this process owns. Cancel it,
+    /// then lodge our own request. Keep the process alive for both looks: otherwise watchOS can suspend us during
+    /// the two-second cancel window, leaving no daemon-held connect until the user opens the app again.
+    private func settleRestoredPeripheral(_ peripheral: CBPeripheral) {
         dispatchPrecondition(condition: .onQueue(queue))
-        guard !settlingRestoredClose else { return }
-        settlingRestoredClose = true
-        watchLog("restored as disconnecting with no close of ours — cancelling it and lodging a fresh connect")
+        guard !settlingRestoredPeripheral else { return }
+        settlingRestoredPeripheral = true
+        let restoredState = peripheral.state == .connecting ? "connecting" : "disconnecting"
+        watchLog("restored as \(restoredState) with no request of ours — cancelling it and lodging a fresh connect")
         central.cancelPeripheralConnection(peripheral)
         let id = peripheral.identifier
-        let release = holdProcess(reason: "G7 settling a restored close", upTo: 10)
+        let release = holdProcess(reason: "G7 settling a restored connection", upTo: 10)
         func look(after delay: TimeInterval, last: Bool) {
             queue.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self else { return release() }
-                let finish = { self.settlingRestoredClose = false; release() }
+                let finish = { self.settlingRestoredPeripheral = false; release() }
                 // a close callback or a connect of its own came first
                 guard !self.lodged, let p = self.central.retrievePeripherals(withIdentifiers: [id]).first,
                       p.state != .connected
                 else { return finish() }
+                if !last && (p.state == .connecting || p.state == .disconnecting) {
+                    self.central.cancelPeripheralConnection(p)
+                    look(after: 5, last: true)
+                    return
+                }
                 switch p.state {
                 case .disconnected:
                     finish()
-                    self.lodge(p, why: "after cancelling a restored close")
-                case .disconnecting where !last:
-                    self.central.cancelPeripheralConnection(p)
-                    look(after: 5, last: true)
+                    self.lodge(p, why: "after cancelling a restored \(restoredState) peripheral")
                 default:
                     self.lodged = true
                     self.lodgedAt = Date()
                     self.central.connect(p, options: nil)
-                    self.watchLog("restored close still pending after the cancel — lodged our own over it")
+                    self.watchLog("restored \(restoredState) peripheral still pending after the cancel — lodged our own over it")
                     finish()
                 }
             }
