@@ -518,6 +518,10 @@ public class G7CGMManager: CGMManager {
         sensor.recheckAcquisition()
     }
 
+    public func appBecameActive() {
+        sensor.appBecameActive()
+    }
+
     /// The watch app is leaving the screen: a connect is lodged before watchOS freezes it. No effect on the phone.
     public func appLeavingScreen() {
         sensor.appLeavingScreen()

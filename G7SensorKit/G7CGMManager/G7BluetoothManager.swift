@@ -141,6 +141,8 @@ protocol G7AcquisitionArm: AnyObject {
     func noteReading(at timestamp: Date)
     /// Any wake: put acquisition right if a lost callback left nothing standing.
     func recheck()
+    /// The app returned to the foreground. Background scan passes can resume here.
+    func appBecameActive()
     /// The app is about to be frozen: no hold may stand between it and a lodged request.
     func leavingScreen()
 }
@@ -286,6 +288,12 @@ class G7BluetoothManager: NSObject {
                 return
             }
             self.acquisitionArm?.recheck()
+        }
+    }
+
+    func appBecameActive() {
+        managerQueue.async {
+            self.acquisitionArm?.appBecameActive()
         }
     }
 
