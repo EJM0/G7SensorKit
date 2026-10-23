@@ -111,6 +111,9 @@ final class G7Authenticator {
         /// Whether this run performed the EC-JPAKE exchange (as opposed to
         /// reusing a stored key).
         let didExchangeKeys: Bool
+        /// The sensor dropped the link before confirming the Bluetooth bond. The key holds only if the
+        /// system pairing went through; with the app in the background it can't, and the sensor discards it.
+        var bondUnconfirmed = false
     }
 
     /// Per-step response deadline for a reconnect. Short: the link is up and
@@ -229,7 +232,7 @@ final class G7Authenticator {
             return Result(sharedKey: sharedKey, deviceName: peripheral.peripheral.name, didExchangeKeys: didExchangeKeys)
         }
 
-        if !didExchangeKeys {
+        if !didExchangeKeys, !status.isAuthenticated {
             // A reconnect that got this far without being authenticated has a
             // key the sensor no longer honours. Re-pairing is the only fix,
             // and the caller decides whether it can do that unattended.
@@ -240,14 +243,26 @@ final class G7Authenticator {
         }
 
         report("Running the certificate exchange (auth=\(status.authStatus) bond=\(status.bondStatus))")
-        try exchangeCertificates(peripheral, authentication: authentication)
-        try answerKeyChallenge(peripheral, authentication: authentication)
-        try finalizeAndBond(peripheral, authentication: authentication)
+        let bonded: Bool
+        do {
+            try exchangeCertificates(peripheral, authentication: authentication)
+            try answerKeyChallenge(peripheral, authentication: authentication)
+            bonded = try finalizeAndBond(peripheral, authentication: authentication)
+        } catch where !didExchangeKeys {
+            // Authenticated but not bonded on a reconnect (05 01 02 after the system bond was lost): the key
+            // still holds, so the certificate phase bonds again. If that fails, pair again as before.
+            report("Bonding again with the saved key failed: \(error)")
+            throw G7AuthenticatorError.unexpectedResponse(
+                step: "reconnect",
+                response: Data([0x05, status.authStatus, status.bondStatus])
+            )
+        }
 
         return Result(
             sharedKey: sharedKey,
             deviceName: peripheral.peripheral.name,
-            didExchangeKeys: didExchangeKeys
+            didExchangeKeys: didExchangeKeys,
+            bondUnconfirmed: !bonded
         )
     }
 
@@ -437,7 +452,8 @@ final class G7Authenticator {
 
     // MARK: - Finalize
 
-    private func finalizeAndBond(_ peripheral: G7PeripheralManager, authentication: G7AuthMessageBuffer) throws {
+    /// - Returns: false when the sensor dropped the link before confirming the bond.
+    private func finalizeAndBond(_ peripheral: G7PeripheralManager, authentication: G7AuthMessageBuffer) throws -> Bool {
         report("Finalizing")
         try peripheral.writeValue(Data([0x06, 0x1E]), for: .authentication, type: .withResponse)
         _ = try waitForAuthentication(authentication, prefix: 0x06, step: "finalize")
@@ -460,10 +476,13 @@ final class G7Authenticator {
         if let confirmation = confirmation {
             report("Bonded (\(confirmation.match.hexadecimalString))")
         } else if peripheral.peripheral.state != .connected {
-            report("The sensor dropped the link after the bond request; the key is installed and the next connection will use it")
+            report("The sensor dropped the link after the bond request. The key holds only if the Bluetooth pairing "
+                + "went through; if not, the next connection finds it refused and pairs again")
+            return false
         } else {
             report("No bond confirmation arrived; continuing, since the handshake already succeeded")
         }
+        return true
     }
 
     // MARK: - Waiting

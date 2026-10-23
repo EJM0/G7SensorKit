@@ -110,6 +110,9 @@ public struct G7CGMManagerState: RawRepresentable, Equatable {
     /// were passed in, so setup, pairing and the sensor's lifecycle belong to that controller.
     var configuredByAnotherController: Bool = false
 
+    /// The user wants the watch to read this sensor itself (the Read on Apple Watch setting).
+    var watchDirectReadEnabled = false
+
     init() {
     }
 
@@ -171,6 +174,7 @@ public struct G7CGMManagerState: RawRepresentable, Equatable {
         self.shareLastErrorAt = rawValue["shareLastErrorAt"] as? Date
         self.suspectedSessionEndAt = rawValue["suspectedSessionEndAt"] as? Date
         self.configuredByAnotherController = rawValue["configuredByAnotherController"] as? Bool ?? false
+        self.watchDirectReadEnabled = rawValue["watchDirectReadEnabled"] as? Bool ?? false
         // A manager passed its configuration reads directly: there is no session to eavesdrop on.
         // Without a code it stands down until a new configuration brings one.
         if configuredByAnotherController {
@@ -212,6 +216,9 @@ public struct G7CGMManagerState: RawRepresentable, Equatable {
         rawValue["shareLastError"] = shareLastError
         rawValue["shareLastErrorAt"] = shareLastErrorAt
         rawValue["suspectedSessionEndAt"] = suspectedSessionEndAt
+        if watchDirectReadEnabled {
+            rawValue["watchDirectReadEnabled"] = true
+        }
         if configuredByAnotherController {
             rawValue["configuredByAnotherController"] = true
         }
