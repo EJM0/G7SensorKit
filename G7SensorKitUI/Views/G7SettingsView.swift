@@ -753,28 +753,56 @@ if viewModel.sessionMode == .eavesdropping {
         }
     }
 
-    /// Minutes since the last reading, live. Readings are 5 minutes apart,
-    /// so past 10 something is late and past 20 something is wrong.
+    /// Readings are 5 minutes apart: until the next is due, a countdown to it; once one is late, the
+    /// minutes since the last, as past 10 something is late and past 20 something is wrong.
     @ViewBuilder
     private var lastReadingAge: some View {
         if let latest = viewModel.latestReadingTimestamp {
-            TimelineView(.everyMinute) { context in
-                let minutes = max(0, Int(context.date.timeIntervalSince(latest) / 60))
-                let color: Color = minutes > 20 ? guidanceColors.critical : (minutes > 10 ? guidanceColors.warning : glucoseTintColor)
-                HStack(spacing: 8) {
-                    badge(systemName: "arrow.triangle.2.circlepath", color: color)
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(minutes < 90 ? String(minutes) : String(minutes / 60))
-                            .font(.system(size: 28, weight: .bold))
-                        Text(minutes < 90
-                            ? LocalizedString("min", comment: "Unit after the minutes-since-last-reading number")
-                            : LocalizedString("hr", comment: "Unit after the hours-since-last-reading number"))
-                            .foregroundColor(.secondary)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let age = max(0, context.date.timeIntervalSince(latest))
+                if age < Self.readingInterval + Self.readingGrace {
+                    let remaining = max(0, Int((Self.readingInterval - age).rounded(.up)))
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .accessibilityHidden(true)
+                        Text(String(format: "%d:%02d", remaining / 60, remaining % 60))
+                            .monospacedDigit()
+                            .accessibilityLabel(String(format: LocalizedString("Next reading in %1$@", comment: "Accessibility label for the countdown to the next G7 reading (1: duration)"),
+                                                       Self.countdownFormatter.string(from: TimeInterval(remaining)) ?? ""))
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                } else {
+                    let minutes = Int(age / 60)
+                    let color: Color = minutes > 20 ? guidanceColors.critical : (minutes > 10 ? guidanceColors.warning : glucoseTintColor)
+                    HStack(spacing: 8) {
+                        badge(systemName: "arrow.triangle.2.circlepath", color: color)
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(minutes < 90 ? String(minutes) : String(minutes / 60))
+                                .font(.system(size: 28, weight: .bold))
+                            Text(minutes < 90
+                                ? LocalizedString("min", comment: "Unit after the minutes-since-last-reading number")
+                                : LocalizedString("hr", comment: "Unit after the hours-since-last-reading number"))
+                                .foregroundColor(.secondary)
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(sessionLengthFormatter.string(from: TimeInterval(minutes * 60)) ?? "")
                     }
                 }
             }
         }
     }
+
+    private static let countdownFormatter: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.minute, .second]
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+
+    private static let readingInterval: TimeInterval = 5 * 60
+    /// How long past due the countdown holds at 0:00 before the age shows instead.
+    private static let readingGrace: TimeInterval = 60
 
     private func badge(systemName: String, color: Color) -> some View {
         Image(systemName: systemName)
