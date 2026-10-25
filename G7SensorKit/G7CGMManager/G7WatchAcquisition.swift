@@ -269,15 +269,11 @@ public final class G7WatchAcquisition: G7AcquisitionArm {
     func leavingScreen() {
         isForeground = false
         let state = manager.activePeripheral?.state
-        if holdPending, let end = endHold {
-            // what's left of the wait goes with the request, so it still lands past the sensor's tail
-            let remaining = holdEndsAt.map { $0.timeIntervalSinceNow } ?? 0
-            watchLog(String(format: "app leaving the screen — ending the hold, lodging now (%.0f s left as start delay)", max(0, remaining)))
-            holdPending = false; endHold = nil; holdEndsAt = nil
-            end()
-            if let p = manager.activePeripheral, p.state != .connected {
-                lodge(p, why: "app leaving the screen", startDelay: startDelayUnavailable ? 0 : remaining)
-            }
+        if holdPending {
+            // Pete Schwamb's take (LoopKit/G7SensorKit#80): no connect into the sensor's advertising tail as the app
+            // leaves the screen, and no start delay. The hold keeps waiting out the tail; if watchOS ends it first,
+            // its end lodges at once (`relodge`).
+            watchLog("app leaving the screen — the hold keeps waiting out the sensor's tail (no start delay)")
             return
         }
         // lodged or scanning already, or a reading on the radio: its close relodges as ever

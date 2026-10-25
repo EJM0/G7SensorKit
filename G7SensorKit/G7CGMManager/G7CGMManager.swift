@@ -998,6 +998,14 @@ extension G7CGMManager: G7SensorDelegate {
         }
     }
 
+    public func sensor(_ sensor: G7Sensor, didDiscardStaleCalibrationEnteredAt date: Date) {
+        mutateState { state in
+            if state.calibration?.outcome == .pending, state.calibration?.enteredAt == date {
+                state.calibration?.outcome = .expired(at: Date())
+            }
+        }
+    }
+
     public func sensor(_ sensor: G7Sensor, didReadCalibrationBounds bounds: G7CalibrationBoundsMessage) {
         mutateState { state in
             state.calibrationBounds = bounds
