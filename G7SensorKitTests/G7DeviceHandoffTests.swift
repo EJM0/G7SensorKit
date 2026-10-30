@@ -152,7 +152,7 @@ final class G7DeviceHandoffTests: XCTestCase {
         var state = phoneState
         state.sessionMode = .eavesdropping
         let manager = makeManager(state: state)
-        _ = manager.sensor(manager.sensor, didDiscoverNewSensor: "DXCM77", activatedAt: Date())
+        _ = manager.sensor(manager.sensor, didDiscoverNewSensor: "DXCM77", activatedAt: Date(), peripheralIdentifier: UUID())
         XCTAssertNil(manager.state.pairingCode, "the code belonged to the sensor just replaced")
     }
 
@@ -201,7 +201,7 @@ final class G7DeviceHandoffTests: XCTestCase {
         var state = G7CGMManagerState.adopted(from: makeManager(state: phoneState).exportConfiguration().state)
         state.sessionMode = .eavesdropping
         let manager = makeManager(state: state)
-        _ = manager.sensor(manager.sensor, didDiscoverNewSensor: "DXCM77", activatedAt: Date())
+        _ = manager.sensor(manager.sensor, didDiscoverNewSensor: "DXCM77", activatedAt: Date(), peripheralIdentifier: UUID())
         XCTAssertEqual(manager.state.pairingCode, "1234")
     }
 }
